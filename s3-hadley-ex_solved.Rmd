@@ -1,0 +1,125 @@
+## Lektüre & Quiz: `S3` 
+
+Lesen Sie das [`S3`](https://adv-r.hadley.nz/s3.html) Kapitel von H. Wickham's *Advanced R*. 
+Bearbeiten Sie (mindestens) die folgenden von dort übernommenen/inspirierten Aufgaben:
+
+- Was tut die `as.data.frame.data.frame()` Methode? Warum ist das verwirrend? Wie können Sie derartige Verwirrung in Ihrem eigenen Code vermeiden?
+`as.data.frame` ist eine Generic und `as.data.frame.data.frame` die Method fuer
+ein `data.frame`, fuer ein Objekt, dass zur Klasse `data.frame` gehoert,
+ueberschreibt die Methode die Klasse wenn mehr als zwei Zugehoerigkeiten sind
+mit `data.frame`. Dann wird gecheckt ob neue Zeilennamen verwendet werden
+sollen, wenn ja wird gecheckt ob die Anzahl der bisherigen Zeilennamen (ueber
+`.row_names_info` mit `type = 2` ermittelt) und wenn das passt dann werden die
+Zeilennamen ueberschrieben, ansonsten bekommt man einen Fehler.
+
+- Beschreiben/erklären Sie das Verhalten dieses Codes:
+```r
+set.seed(1014)
+some_days <- as.Date("2019-11-24") + sample(10, 5)
+mean(some_days)
+# [1] "2019-11-30"
+mean(unclass(some_days))
+# [1] 18230.4
+```
+Verwirrend ist daran eigentlich nur die Benennung. Besser waere vermutlich die
+Generic as_data_frame zu nennen, die dann die Methode data_frame dispatcht,
+also zusammen dann as_data_frame.data_frame. Daten werden in R intern
+(`?Date`) so repraesentiert: "Dates are represented as the number of days since
+1970-01-01, with negative values for earlier dates".
+```r
+sloop::s3_dispatch(mean(some_days))
+```
+Hier dispatcht die Generic mean die Methode mean.Date, die macht eigentlich nix
+anderes wie `mean(unclass(some_days))` also die mittlere Anzahl von Tage seit
+1970-01-01 zu bestimmen aber das Ergebnis wird wieder zu einem Date gemacht
+(ueber `.Date`).
+
+- Welche Klasse hat `x` im folgenden Code? Auf welchem *base type* basiert diese Klasse? Welche Attribute nutzt sie und wie sind die mathematischen Eigenschaften von Verteilungsfunktionen hier konkret implementiert? 
+```r
+x <- ecdf(rpois(100, 10))
+x
+# Empirical CDF 
+# Call: ecdf(rpois(100, 10))
+#  x[1:15] =      1,      4,      5,  ...,     16,     17
+```
+```r
+class(x)  # ecdf, stepfun, function
+sloop::ftype(x)  # base type ist function
+typeof(x) # eigentlich sogar closure 
+str(x)    # Attribute class und call
+```
+`ecdf` gibt eine Funktion der Klasse `"ecdf"` zurueck, also eigentlich eine
+vererbte `stepfun`, sodass deren `knots` Method genutzt werden kann. Intern
+wird ja aber eigentlich nur `approxfun` mit sensiblen Argumenten aufgerufen:
+```r
+unclass(x)
+ls(, envir = environment(x))
+get("method", envir = environment(x)) # 2 also "constant" in approxfun
+get("nobs", envir = environment(x)) # 100, klar weil rpois(100, lambda = 10)
+get("x", envir = environment(x)) # das sind die x aus der ecdf, also eigentlich
+                                 # die dimnames von table(rpois(100, lambda = 10))
+get("y", envir = environment(x)) # das sind die y aus der ecdf, also eigentlich
+                                 # cumsum(table(rpois(100, lambda = 10)) / 100)
+get("yleft", envir = environment(x)) # 0 also 0 wenn Werte kleiner als Min
+get("xright", envir = environment(x)) # 1 also 1 wenn Werte groesser als Max
+```
+
+- Schreiben Sie einen neuen low-level Konstruktor für `data.frame`-Objekte (ohne die Funktionen `as.data.frame()` oder `data.frame()` zu benutzen, selbstverständlich). Machen Sie sich zunächst klar: Auf welchem *base type* basiert `data.frame`? Welche Attribute nutzt `data.frame`? Welche Restriktionen gelten für die verschiedenen Einträge und Attribute?  
+    *Hinweis*: Sehen Sie sich dafür zunächst mal so etwas wie `str(unclass(<irgend ein data.frame>))` an.
+```r
+### constructor
+new_data.frame <- function(x, row_names = NULL) {
+  row_names <- if (is.null(row_names)) {
+    as.character(seq_along(x[[1L]]))
+  } else {
+    row_names
+  }
+  structure(x, row.names = row_names, class = "data.frame")
+}
+
+### validator
+validate_data.frame <- function(x) {
+  x <- unclass(x)
+  checkmate::assert_list(x)
+
+  lengths <- vapply(x, length, integer(1L))
+  n <- lengths[1L]
+  if (!all(lengths == n)) {
+    stop("The length of the list entries must be equal.")
+  }
+  checkmate::assert_character(attr(x, which = "row.names"), len = n,
+                              unique = TRUE, null.ok = TRUE)
+}
+```
+
+- Kategorisieren Sie die Klassen der Rückgabe-Objekte von `lm(), factor(), table(), as.Date(), as.POSIXct(), ecdf(), ordered(), I()` in die Klassentypen *vector class*, *record style class*, *scalar class* die in *Advanced R* beschrieben werden.
+lm scalar class;
+factor vector class;
+table vector class;
+as.Date vector class;
+as.POSIXct record style class;
+ecdf scalar class;
+ordered vector class;
+I vector class?;
+
+- Wie sähe ein Konstruktor `new_lm` für Objekte der Klasse `lm` aus? Warum wäre ein solcher Konstruktor vermutlich nicht besonders nützlich?
+Wir brauchen: coefficients, residuals, fitted.values, rank, weights,
+df.residual, call, terms, contrasts, xlevels, offset, y, x, model, na.action
+von denen manche nur bei Bedarf zurueckgegeben werden.
+Der Konstruktor muss dann aber eigentlich dasselbe machen wie lm.fit bzw.
+lm.wfit und das gibt schon eine Liste mit vielen Slots die wir brauchen
+zurueck... Der Konstruktor muss dann eigentlich ein Rewrite von lm sein.
+
+- Lesen Sie den Quellcode für `t()` und `t.test()`. Ist `t.test()` eine generische S3 Funktion oder eine S3 Methode? Was passiert im Detail wenn sie `t()` auf ein S3-Objekt mit Klasse `test` anwenden (s.u.)? Warum?
+```r
+x <- structure(1:10, class = "test")
+t.(x)
+```
+`t()` is eine generische S3 Funktion, `t.test()` ebenso. Wenn ich x die Klasse
+`"test"` gebe, dann wird wenn ich `t(x)` aufrufe eben eine Method von `t()`
+fuer `"test"` gesucht. Dummerweise wuerde die dann aber `t.test` heissen und
+das kollidiert mit `t.test()`
+```
+sloop::s3_dispatch(t(x))
+```
+
